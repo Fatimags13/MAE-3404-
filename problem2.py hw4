@@ -1,0 +1,123 @@
+# region imports
+from scipy.optimize import fsolve
+import matplotlib.pyplot as plt
+import numpy as np
+from copy import deepcopy
+# endregion
+
+# region functions
+def twoQuadratics(vals):
+    """
+    System of two equations:
+    1) Circle centered at (0,0) radius 4: x^2 + y^2 = 16
+    2) Parabola through (0,1): y = 0.5*x^2 + 1
+    Returns f1=f2=0 when intersection point found.
+    """
+    x, y = vals
+    f1val = x**2 + y**2 - 16  # circle eqn
+    f2val = 0.5*x**2 + 1 - y  # parabola eqn
+    return (f1val, f2val)
+
+def AnothertwoQuadratics(vals, radius=2, width=0.5, offset=1):
+    """
+    System of two equations with user-specified radius, width, offset.
+    """
+    x, y = vals
+    f1val = x**2 + y**2 - radius**2
+    f2val = width*x**2 + offset - y
+    return (f1val, f2val)
+
+def fromNotes(vals):
+    """
+    Example system from class notes.
+    """
+    x, y = vals
+    f1val = np.sin(x) - 3*y
+    f2val = np.exp(y) + np.cos(x)
+    return (f1val, f2val)
+# endregion
+
+# region main
+def main():
+    """
+    Demonstrates fsolve for two-equation systems and plots results.
+    Finds both intersections safely and avoids warnings.
+    """
+    # --- First system: circle and parabola ---
+    # Use two different initial guesses to find both intersections
+    guesses = [(1.2, 0.4), (-1.5, 3.0)]
+    intersections = []
+    for guess in guesses:
+        x, y = fsolve(twoQuadratics, guess)
+        intersections.append((x, y))
+        print("Intersection point:", x, y)
+
+    # --- Plot first system ---
+    xvals = np.linspace(-5, 5, 500)
+    # Circle: compute y only where sqrt is valid
+    radius = 4
+    y_circle_top = np.sqrt(np.maximum(0, radius**2 - xvals**2))
+    y_circle_bottom = -np.sqrt(np.maximum(0, radius**2 - xvals**2))
+    y_parab = 0.5*xvals**2 + 1
+
+    plt.plot(xvals, y_circle_top, label="Circle top")
+    plt.plot(xvals, y_circle_bottom, label="Circle bottom")
+    plt.plot(xvals, y_parab, label="Parabola")
+    # Plot intersection points
+    for x, y in intersections:
+        plt.plot(x, y, 'ro', markersize=8, markerfacecolor='none')
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.title("Circle and Parabola Intersections")
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+    # --- Second system: parameterized circle and parabola ---
+    Rgs = (4, 0.2, 1)
+    radius, width, offset = Rgs
+    x, y = fsolve(AnothertwoQuadratics, (1,1), Rgs)
+    print("Second function intersection:", x, y)
+
+    xvals = np.linspace(-5, 5, 500)
+    y_circle_top = np.sqrt(np.maximum(0, radius**2 - xvals**2))
+    y_circle_bottom = -np.sqrt(np.maximum(0, radius**2 - xvals**2))
+    y_parab = width*xvals**2 + offset
+
+    plt.plot(xvals, y_circle_top, label="Circle top")
+    plt.plot(xvals, y_circle_bottom, label="Circle bottom")
+    plt.plot(xvals, y_parab, label="Parabola")
+    plt.plot(x, y, 'ro', markersize=8, markerfacecolor='none')
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.title("Parameterized Circle and Parabola")
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+    # --- Third system: fromNotes ---
+    # Find two roots with different initial guesses
+    roots = [(-3,0), (-2,0)]
+    for guess in roots:
+        x, y = fsolve(fromNotes, guess)
+        print("fromNotes root:", x, y)
+        # safe plotting
+        xvals = np.linspace(-3.5, -2, 500)
+        y_fn1 = 1/3*np.sin(xvals)
+        # avoid log of negative: only plot where cos(x) < 0
+        y_fn2 = np.log(np.abs(-np.cos(xvals)))
+        plt.plot(xvals, y_fn1, label="1/3 sin(x)")
+        plt.plot(xvals, y_fn2, label="log(-cos(x))")
+        plt.plot(x, y, 'ro', markersize=8, markerfacecolor='none')
+        plt.xlabel("x")
+        plt.ylabel("y")
+        plt.title("fromNotes System")
+        plt.grid(True)
+        plt.legend()
+        plt.show()
+# endregion
+
+# region function call
+if __name__ == "__main__":
+    main()
+# endregion
