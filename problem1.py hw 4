@@ -1,0 +1,114 @@
+#region imports
+import numpy as np
+from scipy.integrate import quad
+from scipy.optimize import fsolve
+#endregion
+
+
+#region function definitions
+
+def ln_pdf(mu, sigma, D):
+    """
+    Computes the lognormal probability density function.
+    """
+    return (1 / (D * sigma * np.sqrt(2*np.pi))) * \
+           np.exp(-((np.log(D) - mu)**2) / (2*sigma**2))
+
+
+def F_lnpdf(mu, sigma, D):
+    """
+    Computes the lognormal CDF using numerical integration.
+    """
+    value, error = quad(ln_pdf, 0, D, args=(mu, sigma))
+    return value
+
+
+def F_tlnpdf(params):
+    """
+    Computes truncated lognormal CDF.
+    Used inside fsolve.
+    """
+    ln_Mean, ln_sig, D_Min, D_Max, D, F_DMax, F_DMin = params
+
+    D = D[0]   # fsolve passes D as array, extract scalar
+
+    F_D = F_lnpdf(ln_Mean, ln_sig, D)
+
+    return (F_D - F_DMin) / (F_DMax - F_DMin)
+
+
+def makeSample(params, N):
+    """
+    Generates random sample using inverse transform sampling.
+    """
+    ln_Mean, ln_sig, D_Min, D_Max, F_DMax, F_DMin = params
+
+    probs = np.random.uniform(0, 1, N)  # generate uniform probabilities
+    samples = []
+
+    for i in range(N):
+
+        def equation(D):
+            """
+            Root equation: F(D) - u = 0
+            """
+            return F_tlnpdf(
+                (ln_Mean, ln_sig, D_Min, D_Max, D, F_DMax, F_DMin)
+            ) - probs[i]
+
+        guess = (D_Min + D_Max) / 2   # initial guess for root
+
+        root = fsolve(equation, guess)
+
+        samples.append(root[0])   # extract scalar root
+
+    return np.array(samples)
+
+
+def main():
+    """
+    Main driver function.
+    """
+    # given lognormal parameters
+    mean_ln = -0.5
+    sig_ln = 0.4
+
+    # truncation limits
+    D_Min = 0.1
+    D_Max = 2.0
+
+    # compute CDF at Dmin and Dmax for truncation
+    F_DMin = F_lnpdf(mean_ln, sig_ln, D_Min)
+    F_DMax = F_lnpdf(mean_ln, sig_ln, D_Max)
+
+    N_sampleSize = 100
+    N_samples = 11
+
+    sampling_means = []
+
+    for j in range(N_samples):
+
+        sample = makeSample(
+            (mean_ln, sig_ln, D_Min, D_Max, F_DMax, F_DMin),
+            N=N_sampleSize
+        )
+
+        sample_mean = np.mean(sample)
+        sample_var = np.var(sample)
+
+        print(f"Sample {j+1}: mean = {sample_mean:.3f}, var = {sample_var:.3f}")
+
+        sampling_means.append(sample_mean)
+
+    print()
+    print(f"Mean of sampling mean: {np.mean(sampling_means):.3f}")
+    print(f"Variance of sampling mean: {np.var(sampling_means):.6f}")
+
+
+#endregion
+
+
+#region function calls
+if __name__ == "__main__":
+    main()
+#endregion
