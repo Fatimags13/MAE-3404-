@@ -1,0 +1,465 @@
+
+"""
+Two-State Steam Property Calculator
+Uses pyXSteam and PySide6
+"""
+
+#region imports
+import sys
+from pyXSteam.XSteam import XSteam
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QGroupBox, QLabel, QLineEdit, QComboBox, QPushButton,
+    QRadioButton
+)
+from PySide6 import QtCore
+from scipy.optimize import fsolve
+#endregion
+
+
+# -----------------------------------------------------------------------------
+# Unit conversions
+# -----------------------------------------------------------------------------
+class UC:
+    psi_to_bar = 1.0 / 14.5038
+    bar_to_psi = 14.5038
+
+    kJkg_to_btulb = 0.429922614
+    btulb_to_kJkg = 1.0 / kJkg_to_btulb
+
+    kJkgC_to_btulbF = 0.238845897
+    btulbF_to_kJkgC = 1.0 / kJkgC_to_btulbF
+
+    m3kg_to_ft3lb = 16.0184634
+    ft3lb_to_m3kg = 1.0 / m3kg_to_ft3lb
+
+    @staticmethod
+    def C_to_F(T):
+        return T * 9.0 / 5.0 + 32.0
+
+    @staticmethod
+    def F_to_C(T):
+        return (T - 32.0) * 5.0 / 9.0
+
+
+# -----------------------------------------------------------------------------
+# Thermodynamic state object
+# -----------------------------------------------------------------------------
+class ThermoState:
+    def __init__(self, SI=True):
+        self.SI = SI
+        self.steam = XSteam(
+            XSteam.UNIT_SYSTEM_MKS if SI else XSteam.UNIT_SYSTEM_FLS
+        )
+
+        self.region = "Unknown"
+        self.p = None
+        self.t = None
+        self.u = None
+        self.h = None
+        self.s = None
+        self.v = None
+        self.x = None
+
+    @staticmethod
+    def clamp(value, low, high):
+        return max(low, min(high, value))
+
+    def setState(self, prop1, val1, prop2, val2):
+        st = self.steam
+        prop1 = prop1.lower()
+        prop2 = prop2.lower()
+
+        values = {prop1: float(val1), prop2: float(val2)}
+
+        # ------------------------------------------------------------------
+        # Pressure and Temperature
+        # ------------------------------------------------------------------
+        if 'p' in values and 't' in values:
+            self.p = values['p']
+            self.t = values['t']
+
+            Tsat = st.tsat_p(self.p)
+
+            if self.t < Tsat:
+                self.region = "Subcooled Liquid"
+                self.x = 0.0
+            elif self.t > Tsat:
+                self.region = "Superheated Vapor"
+                self.x = 1.0
+            else:
+                self.region = "Two-Phase"
+                self.x = 0.0
+
+        # ------------------------------------------------------------------
+        # Pressure and Quality
+        # ------------------------------------------------------------------
+        elif 'p' in values and 'x' in values:
+            self.p = values['p']
+            self.x = self.clamp(values['x'], 0.0, 1.0)
+            self.t = st.tsat_p(self.p)
+            self.region = "Two-Phase"
+
+        # ------------------------------------------------------------------
+        # Pressure and Enthalpy
+        # ------------------------------------------------------------------
+        elif 'p' in values and 'h' in values:
+            self.p = values['p']
+            self.h = values['h']
+
+            hf = st.hL_p(self.p)
+            hg = st.hV_p(self.p)
+
+            if self.h < hf:
+                self.region = "Subcooled Liquid"
+                self.t = fsolve(
+                    lambda T: st.h_pt(self.p, T) - self.h,
+                    st.tsat_p(self.p) - 10
+                )[0]
+                self.x = 0.0
+
+            elif self.h > hg:
+                self.region = "Superheated Vapor"
+                self.t = st.t_ph(self.p, self.h)
+                self.x = 1.0
+
+            else:
+                self.region = "Two-Phase"
+                self.t = st.tsat_p(self.p)
+                self.x = (self.h - hf) / (hg - hf)
+
+        # ------------------------------------------------------------------
+        # Pressure and Entropy
+        # ------------------------------------------------------------------
+        elif 'p' in values and 's' in values:
+            self.p = values['p']
+            self.s = values['s']
+
+            sf = st.sL_p(self.p)
+            sg = st.sV_p(self.p)
+
+            if self.s < sf:
+                self.region = "Subcooled Liquid"
+                self.t = fsolve(
+                    lambda T: st.s_pt(self.p, T) - self.s,
+                    st.tsat_p(self.p) - 10
+                )[0]
+                self.x = 0.0
+
+            elif self.s > sg:
+                self.region = "Superheated Vapor"
+                self.t = st.t_ps(self.p, self.s)
+                self.x = 1.0
+
+            else:
+                self.region = "Two-Phase"
+                self.t = st.tsat_p(self.p)
+                self.x = (self.s - sf) / (sg - sf)
+
+        # ------------------------------------------------------------------
+        # Pressure and Specific Volume
+        # ------------------------------------------------------------------
+        elif 'p' in values and 'v' in values:
+            self.p = values['p']
+            self.v = values['v']
+
+            vf = st.vL_p(self.p)
+            vg = st.vV_p(self.p)
+
+            if self.v < vf:
+                self.region = "Subcooled Liquid"
+                self.t = fsolve(
+                    lambda T: st.v_pt(self.p, T) - self.v,
+                    st.tsat_p(self.p) - 10
+                )[0]
+                self.x = 0.0
+
+            elif self.v > vg:
+                self.region = "Superheated Vapor"
+                self.t = fsolve(
+                    lambda T: st.v_pt(self.p, T) - self.v,
+                    st.tsat_p(self.p) + 10
+                )[0]
+                self.x = 1.0
+
+            else:
+                self.region = "Two-Phase"
+                self.t = st.tsat_p(self.p)
+                self.x = (self.v - vf) / (vg - vf)
+
+        else:
+            raise ValueError(
+                "That property combination is not implemented yet. "
+                "Use p with T, h, s, v, or x."
+            )
+
+        self.calculateRemainingProperties()
+
+    def calculateRemainingProperties(self):
+        st = self.steam
+
+        if self.region == "Two-Phase":
+            self.u = st.uL_p(self.p) + self.x * (st.uV_p(self.p) - st.uL_p(self.p))
+            self.h = st.hL_p(self.p) + self.x * (st.hV_p(self.p) - st.hL_p(self.p))
+            self.s = st.sL_p(self.p) + self.x * (st.sV_p(self.p) - st.sL_p(self.p))
+            self.v = st.vL_p(self.p) + self.x * (st.vV_p(self.p) - st.vL_p(self.p))
+
+        else:
+            self.u = st.u_pt(self.p, self.t)
+            self.h = st.h_pt(self.p, self.t)
+            self.s = st.s_pt(self.p, self.t)
+            self.v = st.v_pt(self.p, self.t)
+
+
+# -----------------------------------------------------------------------------
+# Property list
+# -----------------------------------------------------------------------------
+PROPERTIES = [
+    "Pressure (p)",
+    "Temperature (t)",
+    "Enthalpy (h)",
+    "Entropy (s)",
+    "Specific Volume (v)",
+    "Quality (x)"
+]
+
+
+# -----------------------------------------------------------------------------
+# Main window
+# -----------------------------------------------------------------------------
+class MainWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        self.currentUnits = 'SI'
+
+        self.setWindowTitle("Two-State Steam Property Calculator")
+        self.resize(1000, 700)
+
+        self.buildUI()
+        self.connectSignals()
+        self.setUnits()
+
+    def buildStateInputs(self, title):
+        group = QGroupBox(title)
+        grid = QGridLayout(group)
+
+        cmb1 = QComboBox()
+        cmb2 = QComboBox()
+        cmb1.addItems(PROPERTIES)
+        cmb2.addItems(PROPERTIES)
+        cmb2.setCurrentIndex(1)
+
+        edit1 = QLineEdit("1.0")
+        edit2 = QLineEdit("100.0")
+
+        unit1 = QLabel()
+        unit2 = QLabel()
+
+        warning = QLabel()
+        warning.setStyleSheet("color:red;")
+
+        grid.addWidget(QLabel("Property 1"), 0, 0)
+        grid.addWidget(QLabel("Property 2"), 0, 2)
+
+        grid.addWidget(cmb1, 1, 0)
+        grid.addWidget(cmb2, 1, 2)
+
+        grid.addWidget(edit1, 2, 0)
+        grid.addWidget(unit1, 2, 1)
+
+        grid.addWidget(edit2, 2, 2)
+        grid.addWidget(unit2, 2, 3)
+
+        grid.addWidget(warning, 3, 0, 1, 4)
+
+        return group, {
+            'cmb1': cmb1,
+            'cmb2': cmb2,
+            'edit1': edit1,
+            'edit2': edit2,
+            'unit1': unit1,
+            'unit2': unit2,
+            'warning': warning
+        }
+
+    def buildUI(self):
+        root = QVBoxLayout(self)
+
+        # Unit Selection
+        unitGroup = QGroupBox("Units")
+        unitLayout = QHBoxLayout(unitGroup)
+
+        self.rdoSI = QRadioButton("SI")
+        self.rdoEnglish = QRadioButton("English")
+        self.rdoSI.setChecked(True)
+
+        unitLayout.addWidget(self.rdoSI)
+        unitLayout.addWidget(self.rdoEnglish)
+
+        root.addWidget(unitGroup)
+
+        # Input states
+        inputGroup = QGroupBox("Specified Properties")
+        inputLayout = QHBoxLayout(inputGroup)
+
+        self.state1Group, self.state1 = self.buildStateInputs("State 1")
+        self.state2Group, self.state2 = self.buildStateInputs("State 2")
+
+        inputLayout.addWidget(self.state1Group)
+        inputLayout.addWidget(self.state2Group)
+
+        root.addWidget(inputGroup)
+
+        self.btnCalculate = QPushButton("Calculate")
+        root.addWidget(self.btnCalculate)
+
+        # Outputs
+        outputGroup = QGroupBox("State Properties")
+        outputLayout = QHBoxLayout(outputGroup)
+
+        self.lblState1 = QLabel()
+        self.lblState2 = QLabel()
+        self.lblDelta = QLabel()
+
+        for lbl in [self.lblState1, self.lblState2, self.lblDelta]:
+            lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
+            lbl.setStyleSheet("font-family: Courier New;")
+
+        box1 = QGroupBox("State 1")
+        l1 = QVBoxLayout(box1)
+        l1.addWidget(self.lblState1)
+
+        box2 = QGroupBox("State 2")
+        l2 = QVBoxLayout(box2)
+        l2.addWidget(self.lblState2)
+
+        box3 = QGroupBox("State Change")
+        l3 = QVBoxLayout(box3)
+        l3.addWidget(self.lblDelta)
+
+        outputLayout.addWidget(box1)
+        outputLayout.addWidget(box2)
+        outputLayout.addWidget(box3)
+
+        root.addWidget(outputGroup)
+
+    def connectSignals(self):
+        self.rdoSI.clicked.connect(self.setUnits)
+        self.rdoEnglish.clicked.connect(self.setUnits)
+        self.btnCalculate.clicked.connect(self.calculate)
+
+    def getPropertyKey(self, text):
+        return text[text.find('(')+1:text.find(')')]
+
+    def setUnits(self):
+        SI = self.rdoSI.isChecked()
+
+        if SI:
+            self.pUnit = 'bar'
+            self.tUnit = 'C'
+            self.hUnit = 'kJ/kg'
+            self.sUnit = 'kJ/kg-K'
+            self.vUnit = 'm³/kg'
+        else:
+            self.pUnit = 'psi'
+            self.tUnit = 'F'
+            self.hUnit = 'Btu/lb'
+            self.sUnit = 'Btu/lb-F'
+            self.vUnit = 'ft³/lb'
+
+        for state in [self.state1, self.state2]:
+            for combo, label in [
+                (state['cmb1'], state['unit1']),
+                (state['cmb2'], state['unit2'])
+            ]:
+                key = self.getPropertyKey(combo.currentText())
+
+                if key == 'p':
+                    label.setText(self.pUnit)
+                elif key == 't':
+                    label.setText(self.tUnit)
+                elif key == 'h':
+                    label.setText(self.hUnit)
+                elif key == 's':
+                    label.setText(self.sUnit)
+                elif key == 'v':
+                    label.setText(self.vUnit)
+                else:
+                    label.setText('')
+
+    def formatState(self, state):
+        return (
+            f"Region = {state.region}\n"
+            f"p = {state.p:10.4f} {self.pUnit}\n"
+            f"T = {state.t:10.4f} {self.tUnit}\n"
+            f"u = {state.u:10.4f} {self.hUnit}\n"
+            f"h = {state.h:10.4f} {self.hUnit}\n"
+            f"s = {state.s:10.4f} {self.sUnit}\n"
+            f"v = {state.v:10.6f} {self.vUnit}\n"
+            f"x = {state.x:10.4f}"
+        )
+
+    def formatDelta(self, s1, s2):
+        return (
+            f"Δp = {s2.p - s1.p:10.4f} {self.pUnit}\n"
+            f"ΔT = {s2.t - s1.t:10.4f} {self.tUnit}\n"
+            f"Δu = {s2.u - s1.u:10.4f} {self.hUnit}\n"
+            f"Δh = {s2.h - s1.h:10.4f} {self.hUnit}\n"
+            f"Δs = {s2.s - s1.s:10.4f} {self.sUnit}\n"
+            f"Δv = {s2.v - s1.v:10.6f} {self.vUnit}\n"
+            f"Δx = {s2.x - s1.x:10.4f}"
+        )
+
+    def calculate(self):
+        try:
+            k11 = self.getPropertyKey(self.state1['cmb1'].currentText())
+            k12 = self.getPropertyKey(self.state1['cmb2'].currentText())
+
+            if k11 == k12:
+                raise ValueError("State 1 cannot use the same property twice")
+
+            s1 = ThermoState(self.rdoSI.isChecked())
+            s1.setState(
+                k11,
+                self.state1['edit1'].text(),
+                k12,
+                self.state1['edit2'].text()
+            )
+
+            k21 = self.getPropertyKey(self.state2['cmb1'].currentText())
+            k22 = self.getPropertyKey(self.state2['cmb2'].currentText())
+
+            if k21 == k22:
+                raise ValueError("State 2 cannot use the same property twice")
+
+            s2 = ThermoState(self.rdoSI.isChecked())
+            s2.setState(
+                k21,
+                self.state2['edit1'].text(),
+                k22,
+                self.state2['edit2'].text()
+            )
+
+            self.lblState1.setText(self.formatState(s1))
+            self.lblState2.setText(self.formatState(s2))
+            self.lblDelta.setText(self.formatDelta(s1, s2))
+
+        except Exception as e:
+            self.lblState1.setText("Error")
+            self.lblState2.setText(str(e))
+            self.lblDelta.setText("")
+
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
+def main():
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
+
+
+if __name__ == '__main__':
+    main()
